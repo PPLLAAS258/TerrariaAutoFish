@@ -16,7 +16,9 @@
 
 程序界面会自动匹配文本大小
 
-![alt text](UI.png)
+<p align="center">
+  <img src="TerrariaAutoFish/UI.png" width="600" alt="GitHub"/>
+</p>
 
 ## 🚀 快速开始（推荐：打包好的Python的exe 版，无需编译或python环境）
 
