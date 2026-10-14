@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 ============================================================================
- Terraria 自动钓鱼机器人 v1.1（多语言版 · Python 实现）
+ Terraria 自动钓鱼机器人 v1.2（多语言版 · Python 实现）
  Terraria Auto Fishing Bot (Multilingual UI, Python + ctypes)
 ============================================================================
 
  参考项目 : Izzy's Fishing Bot v2.00（作者 D.RU$$ / RussDev7）
- 作者 :PPLLAAS258 原作者:lzzy
  工作原理（与原版一致，100% 外部操作，不读写游戏内存）:
      1. 通过 Windows CoreAudio (WASAPI) 枚举默认扬声器上的全部音频会话；
      2. 找到属于目标进程（默认 Terraria / tModLoader / javaw）的音频轨道，
@@ -18,6 +17,7 @@
  支持语言 : 英语/德语/意大利语/法语/西班牙语/俄语/简体中文/巴西葡萄牙语/
             波兰语/日语/朝鲜语/繁体中文（点击界面 Language 按钮切换）
  依赖     : 仅 Python 标准库（tkinter + ctypes），无需安装任何第三方包。
+ 打包     : 双击运行 build_exe.bat（自动调用 PyInstaller 生成 exe）
  配置文件 : 同目录 TerrariaAutoFishPy.ini
 ============================================================================
 """
@@ -32,7 +32,7 @@ import time
 import tkinter as tk
 import webbrowser
 from tkinter import ttk, messagebox, scrolledtext
-from ctypes import (wintypes, WINFUNCTYPE, POINTER, Structure, byref,
+from ctypes import (wintypes, WINFUNCTYPE, POINTER, Structure, Union, byref,
                     c_void_p, c_ulong, c_uint, c_int, c_long, c_float,
                     c_ushort, c_ubyte, c_uint32, c_longlong, c_size_t,
                     c_wchar, c_wchar_p, cast)
@@ -193,6 +193,79 @@ ole32.CoUninitialize.argtypes   = []
 user32.mouse_event.argtypes = [c_uint, c_uint, c_uint, c_uint, c_ulong]
 user32.mouse_event.restype  = None
 
+user32.keybd_event.argtypes = [c_ubyte, c_ubyte, c_uint, c_void_p]
+user32.keybd_event.restype  = None
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+INPUT_KEYBOARD = 1
+
+user32.MapVirtualKeyW.argtypes = [c_uint, c_uint]
+user32.MapVirtualKeyW.restype  = c_uint
+user32.SendInput.argtypes = [c_uint, c_void_p, c_int]
+user32.SendInput.restype  = c_uint
+
+class KEYBDINPUT(Structure):
+    _fields_ = [("wVk", c_ushort),
+                ("wScan", c_ushort),
+                ("dwFlags", c_ulong),
+                ("time", c_ulong),
+                ("dwExtraInfo", c_size_t)]
+
+class MOUSEINPUT(Structure):
+    _fields_ = [("dx", c_long), ("dy", c_long), ("mouseData", c_ulong),
+                ("dwFlags", c_ulong), ("time", c_ulong), ("dwExtraInfo", c_size_t)]
+
+class HARDWAREINPUT(Structure):
+    _fields_ = [("uMsg", c_ulong), ("wParamL", c_ushort), ("wParamH", c_ushort)]
+
+class _INPUTUNION(Union):
+    _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
+
+class INPUT(Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", c_ulong), ("u", _INPUTUNION)]
+
+def press_key(vk):
+    """硬件级模拟按键：SendInput + KEYEVENTF_SCANCODE 扫描码直发
+       （等效真实键盘硬件输入，游戏/引擎通常都能收到）。
+       按下与抬起间隔 40ms 模拟真实击键；发送失败时回退到虚拟键码方式。
+       返回是否发送成功。"""
+    scan = user32.MapVirtualKeyW(vk, 0)
+    if not scan:
+        scan = vk
+    down = INPUT()
+    down.type = INPUT_KEYBOARD
+    down.ki.wVk = 0
+    down.ki.wScan = scan
+    down.ki.dwFlags = KEYEVENTF_SCANCODE
+    up = INPUT()
+    up.type = INPUT_KEYBOARD
+    up.ki.wVk = 0
+    up.ki.wScan = scan
+    up.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+    try:
+        sent1 = user32.SendInput(1, byref(down), ctypes.sizeof(INPUT))
+        time.sleep(0.04)
+        sent2 = user32.SendInput(1, byref(up), ctypes.sizeof(INPUT))
+        if sent1 == 1 and sent2 == 1:
+            return True
+    except Exception:
+        pass
+    # 回退：用虚拟键码方式再发一次
+    down.ki.wVk = vk
+    down.ki.wScan = scan
+    down.ki.dwFlags = 0
+    up.ki.wVk = vk
+    up.ki.wScan = scan
+    up.ki.dwFlags = KEYEVENTF_KEYUP
+    try:
+        sent1 = user32.SendInput(1, byref(down), ctypes.sizeof(INPUT))
+        time.sleep(0.04)
+        sent2 = user32.SendInput(1, byref(up), ctypes.sizeof(INPUT))
+        return (sent1 == 1 and sent2 == 1)
+    except Exception:
+        return False
+
 kernel32.CreateToolhelp32Snapshot.argtypes = [c_uint, c_uint]
 kernel32.CreateToolhelp32Snapshot.restype  = c_void_p
 kernel32.CloseHandle.argtypes = [c_void_p]
@@ -300,7 +373,7 @@ def _L(code, **kw):
 
 _TR = {}
 _L("zh_cn",
-   app_title="自动钓鱼机器人 v1.1",
+   app_title="自动钓鱼机器人 v1.2",
    grp_status="游戏状态", grp_settings="钓鱼设置", grp_run="运行状态", grp_log="运行日志",
    lbl_proc="游戏进程:", lbl_sess="音频轨道:", lbl_vu="当前音量:",
    st_proc_off="未检测到游戏进程（请先启动游戏）", st_proc_on="已检测到游戏进程",
@@ -313,7 +386,7 @@ _L("zh_cn",
    chk_right="使用右键点击（默认左键）", chk_top="窗口置顶", chk_hotkey="启用快捷键",
    lbl_hk_start="开始键:", lbl_hk_stop="停止键:",
    lbl_state="状态:", st_idle="空闲：按 F9 或点击“开始钓鱼”",
-   stats="抛竿次数: {cast}    鱼获(收线): {fish}    运行时间: {time}",
+   stats="抛竿次数: {cast}    鱼获(收线): {fish}    药水键次数: {pot}    运行时间: {time}",
    btn_start="开始钓鱼", btn_stop="停止", btn_running="运行中...",
    btn_no_game="未检测到游戏...", btn_stopping="正在停止...",
    btn_start_hk="开始钓鱼 ({name})", btn_stop_hk="停止 ({name})",
@@ -350,9 +423,9 @@ _L("zh_cn",
    log_recast="已重新抛竿（第 {n} 次抛竿）。",
    log_timeout="超过 {n} 毫秒无咬钩，收回鱼线并重新抛竿...",
    log_stop_cmd="收到停止指令。",
-   log_end="══════════ 本轮结束：共抛竿 {c} 次，收线 {f} 次，用时 {t} 秒 ══════════",
+   log_end="══════════ 本轮结束：共抛竿 {c} 次，收线 {f} 次，喝药水 {p} 次，用时 {t} 秒 ══════════",
    st_stopped="已停止",
-   log_ready="Terraria 自动钓鱼机器人 v1.1（Python 多语言版）已就绪。",
+   log_ready="Terraria 自动钓鱼机器人 v1.2（Python 多语言版）已就绪。",
    log_listen="监听进程: {p}",
    log_params="参数: 启动延迟 {start}ms / 收线延迟 {pull}ms / 抛竿延迟 {cast}ms / 静默 {noise}ms / 灵敏度 {sens} / 超时 {timeout}ms / 定时停止 {stop} 分钟",
    log_tip="提示：开始前请在游戏内关闭音乐与环境音，手持鱼竿，并保持鱼线已收回。",
@@ -363,9 +436,13 @@ _L("zh_cn",
    hk_fail="快捷键注册失败（可能被其他程序占用），请更换按键或关闭快捷键。",
    hk_fail_stop="停止快捷键注册失败（可能被其他程序占用），请更换按键。",
    st_starting_bot="正在启动...", st_stopping_bot="正在停止...",
+   set_autokeyms="自动喝药水间隔(毫秒):", chk_autokey="启用自动喝药水", lbl_autokey="药水键:",
+   log_autokey="已自动按下药水键 {key}（第 {c} 次，间隔 {n} 毫秒）",
+   log_potion_active="自动喝药水已启动：每 {n} 毫秒按一次药水键 {key}（仅钓鱼运行期间执行）",
+   lbl_potion_count="药水键次数:",
 )
 _L("en",
-   app_title="Auto Fishing Bot v1.1",
+   app_title="Auto Fishing Bot v1.2",
    grp_status="Game Status", grp_settings="Fishing Settings", grp_run="Run Status", grp_log="Log",
    lbl_proc="Game process:", lbl_sess="Audio track:", lbl_vu="Volume:",
    st_proc_off="Game process not detected (start the game first)", st_proc_on="Game process detected",
@@ -378,7 +455,7 @@ _L("en",
    chk_right="Use right click (left by default)", chk_top="Always on top", chk_hotkey="Enable hotkeys",
    lbl_hk_start="Start key:", lbl_hk_stop="Stop key:",
    lbl_state="Status:", st_idle='Idle: press F9 or click "Start Fishing"',
-   stats="Casts: {cast}    Fish caught: {fish}    Runtime: {time}",
+   stats="Casts: {cast}    Fish caught: {fish}    Potions: {pot}    Runtime: {time}",
    btn_start="Start Fishing", btn_stop="Stop", btn_running="Running...",
    btn_no_game="No game detected...", btn_stopping="Stopping...",
    btn_start_hk="Start Fishing ({name})", btn_stop_hk="Stop ({name})",
@@ -415,9 +492,9 @@ _L("en",
    log_recast="Cast again (cast #{n}).",
    log_timeout="No bite for {n} ms. Reeling in and casting again...",
    log_stop_cmd="Stop command received.",
-   log_end="══════════ Session ended: {c} casts, {f} fish, {t} seconds ══════════",
+   log_end="══════════ Session ended: {c} casts, {f} fish, {p} potions, {t} seconds ══════════",
    st_stopped="Stopped",
-   log_ready="Terraria Auto Fishing Bot v1.1 (Python, multilingual) is ready.",
+   log_ready="Terraria Auto Fishing Bot v1.2 (Python, multilingual) is ready.",
    log_listen="Monitored processes: {p}",
    log_params="Params: start delay {start}ms / pull delay {pull}ms / cast delay {cast}ms / silence {noise}ms / sensitivity {sens} / timeout {timeout}ms / auto stop {stop} min",
    log_tip="Tip: turn off music and ambient sounds, hold the rod, and make sure the line is reeled in before starting.",
@@ -428,9 +505,13 @@ _L("en",
    hk_fail="Hotkey registration failed (probably in use by another program). Change the key or disable hotkeys.",
    hk_fail_stop="Stop hotkey registration failed (probably in use). Change the key.",
    st_starting_bot="Starting...", st_stopping_bot="Stopping...",
+   set_autokeyms="Auto-potion interval (ms):", chk_autokey="Enable auto-potion", lbl_autokey="Potion key:",
+   log_autokey="Auto-potion: pressed {key} (press #{c}, every {n} ms)",
+   log_potion_active="Auto-potion active: pressing {key} every {n} ms (only while fishing is running)",
+   lbl_potion_count="Potion presses:",
 )
 _L("de",
-   app_title="Auto-Angler-Bot v1.1",
+   app_title="Auto-Angler-Bot v1.2",
    grp_status="Spielstatus", grp_settings="Angeleinstellungen", grp_run="Betriebsstatus", grp_log="Protokoll",
    lbl_proc="Spielprozess:", lbl_sess="Audiospur:", lbl_vu="Lautstärke:",
    st_proc_off="Spielprozess nicht gefunden (bitte zuerst das Spiel starten)", st_proc_on="Spielprozess gefunden",
@@ -443,7 +524,7 @@ _L("de",
    chk_right="Rechtsklick verwenden (Standard: links)", chk_top="Immer im Vordergrund", chk_hotkey="Hotkeys aktivieren",
    lbl_hk_start="Starttaste:", lbl_hk_stop="Stopptaste:",
    lbl_state="Status:", st_idle='Bereit: F9 drücken oder "Angeln starten" klicken',
-   stats="Würfe: {cast}    Fische: {fish}    Laufzeit: {time}",
+   stats="Würfe: {cast}    Fische: {fish}    Tränke: {pot}    Laufzeit: {time}",
    btn_start="Angeln starten", btn_stop="Stopp", btn_running="Läuft...",
    btn_no_game="Kein Spiel gefunden...", btn_stopping="Wird gestoppt...",
    btn_start_hk="Angeln starten ({name})", btn_stop_hk="Stopp ({name})",
@@ -480,9 +561,9 @@ _L("de",
    log_recast="Erneut ausgeworfen (Wurf Nr. {n}).",
    log_timeout="Kein Biss seit {n} ms. Einholen und erneut auswerfen...",
    log_stop_cmd="Stoppbefehl empfangen.",
-   log_end="══════════ Sitzung beendet: {c} Würfe, {f} Fische, {t} Sekunden ══════════",
+   log_end="══════════ Sitzung beendet: {c} Würfe, {f} Fische, {p} Tränke, {t} Sekunden ══════════",
    st_stopped="Gestoppt",
-   log_ready="Terraria Auto-Angler-Bot v1.1 (Python, mehrsprachig) ist bereit.",
+   log_ready="Terraria Auto-Angler-Bot v1.2 (Python, mehrsprachig) ist bereit.",
    log_listen="Überwachte Prozesse: {p}",
    log_params="Parameter: Startverzögerung {start}ms / Einholen {pull}ms / Auswerfen {cast}ms / Ruhe {noise}ms / Empfindlichkeit {sens} / Zeitlimit {timeout}ms / Auto-Stopp {stop} Min.",
    log_tip="Tipp: Vor dem Start Musik und Umgebungsgeräusche ausschalten, die Angel halten und die Leine einholen.",
@@ -493,9 +574,13 @@ _L("de",
    hk_fail="Hotkey-Registrierung fehlgeschlagen (vermutlich von anderem Programm belegt). Taste ändern oder Hotkeys deaktivieren.",
    hk_fail_stop="Registrierung der Stopptaste fehlgeschlagen (vermutlich belegt). Bitte Taste ändern.",
    st_starting_bot="Startet...", st_stopping_bot="Wird gestoppt...",
+   set_autokeyms="Auto-Trank-Intervall (ms):", chk_autokey="Auto-Trank aktivieren", lbl_autokey="Trank-Taste:",
+   log_autokey="Auto-Trank: Taste {key} gedrückt (Nr. {c}, alle {n} ms)",
+   log_potion_active="Auto-Trank aktiv: Taste {key} alle {n} ms (nur während des Angelns)",
+   lbl_potion_count="Trank-Tasten:",
 )
 _L("it",
-   app_title="Bot di Pesca Automatico v1.1",
+   app_title="Bot di Pesca Automatico v1.2",
    grp_status="Stato del gioco", grp_settings="Impostazioni di pesca", grp_run="Stato di esecuzione", grp_log="Registro",
    lbl_proc="Processo di gioco:", lbl_sess="Traccia audio:", lbl_vu="Volume:",
    st_proc_off="Processo di gioco non rilevato (avvia prima il gioco)", st_proc_on="Processo di gioco rilevato",
@@ -508,7 +593,7 @@ _L("it",
    chk_right="Usa clic destro (predefinito sinistro)", chk_top="Sempre in primo piano", chk_hotkey="Abilita tasti rapidi",
    lbl_hk_start="Tasto avvio:", lbl_hk_stop="Tasto stop:",
    lbl_state="Stato:", st_idle='Inattivo: premi F9 o clicca "Avvia pesca"',
-   stats="Lanci: {cast}    Pesci: {fish}    Tempo: {time}",
+   stats="Lanci: {cast}    Pesci: {fish}    Pozioni: {pot}    Tempo: {time}",
    btn_start="Avvia pesca", btn_stop="Stop", btn_running="In esecuzione...",
    btn_no_game="Gioco non rilevato...", btn_stopping="Arresto...",
    btn_start_hk="Avvia pesca ({name})", btn_stop_hk="Stop ({name})",
@@ -545,9 +630,9 @@ _L("it",
    log_recast="Rilanciato (lancio n. {n}).",
    log_timeout="Nessuna abboccata da {n} ms. Tiro e rilancio...",
    log_stop_cmd="Comando di stop ricevuto.",
-   log_end="══════════ Sessione terminata: {c} lanci, {f} pesci, {t} secondi ══════════",
+   log_end="══════════ Sessione terminata: {c} lanci, {f} pesci, {p} pozioni, {t} secondi ══════════",
    st_stopped="Fermato",
-   log_ready="Terraria Bot di Pesca Automatico v1.1 (Python, multilingue) pronto.",
+   log_ready="Terraria Bot di Pesca Automatico v1.2 (Python, multilingue) pronto.",
    log_listen="Processi monitorati: {p}",
    log_params="Parametri: ritardo avvio {start}ms / tiro {pull}ms / lancio {cast}ms / silenzio {noise}ms / sensibilità {sens} / timeout {timeout}ms / stop automatico {stop} min",
    log_tip="Suggerimento: prima di iniziare disattiva musica e suoni ambientali, tieni la canna e la lenza riavvolta.",
@@ -558,9 +643,13 @@ _L("it",
    hk_fail="Registrazione tasto fallita (probabilmente in uso da un altro programma). Cambia tasto o disattiva i tasti rapidi.",
    hk_fail_stop="Registrazione del tasto di stop fallita (probabilmente in uso). Cambia tasto.",
    st_starting_bot="Avvio...", st_stopping_bot="Arresto...",
+   set_autokeyms="Intervallo pozione automatica (ms):", chk_autokey="Abilita pozione automatica", lbl_autokey="Tasto pozione:",
+   log_autokey="Pozione automatica: premuto {key} (n. {c}, ogni {n} ms)",
+   log_potion_active="Pozione automatica attiva: premo {key} ogni {n} ms (solo durante la pesca)",
+   lbl_potion_count="Pozioni:",
 )
 _L("fr",
-   app_title="Bot de pêche automatique v1.1",
+   app_title="Bot de pêche automatique v1.2",
    grp_status="État du jeu", grp_settings="Paramètres de pêche", grp_run="État d'exécution", grp_log="Journal",
    lbl_proc="Processus du jeu :", lbl_sess="Piste audio :", lbl_vu="Volume :",
    st_proc_off="Processus du jeu introuvable (lancez d'abord le jeu)", st_proc_on="Processus du jeu détecté",
@@ -573,7 +662,7 @@ _L("fr",
    chk_right="Utiliser le clic droit (gauche par défaut)", chk_top="Toujours au premier plan", chk_hotkey="Activer les raccourcis",
    lbl_hk_start="Touche départ :", lbl_hk_stop="Touche arrêt :",
    lbl_state="État :", st_idle='Au repos : appuyez sur F9 ou cliquez sur « Lancer la pêche »',
-   stats="Lancers : {cast}    Prises : {fish}    Durée : {time}",
+   stats="Lancers : {cast}    Prises : {fish}    Potions : {pot}    Durée : {time}",
    btn_start="Lancer la pêche", btn_stop="Arrêter", btn_running="En cours...",
    btn_no_game="Jeu introuvable...", btn_stopping="Arrêt...",
    btn_start_hk="Lancer la pêche ({name})", btn_stop_hk="Arrêter ({name})",
@@ -610,9 +699,9 @@ _L("fr",
    log_recast="Nouveau lancer (lancer n° {n}).",
    log_timeout="Aucune touche depuis {n} ms. Remontée et nouveau lancer...",
    log_stop_cmd="Commande d'arrêt reçue.",
-   log_end="══════════ Session terminée : {c} lancers, {f} prises, {t} secondes ══════════",
+   log_end="══════════ Session terminée : {c} lancers, {f} prises, {p} potions, {t} secondes ══════════",
    st_stopped="Arrêté",
-   log_ready="Terraria Bot de pêche automatique v1.1 (Python, multilingue) prêt.",
+   log_ready="Terraria Bot de pêche automatique v1.2 (Python, multilingue) prêt.",
    log_listen="Processus surveillés : {p}",
    log_params="Paramètres : démarrage {start}ms / remontée {pull}ms / lancer {cast}ms / silence {noise}ms / sensibilité {sens} / délai {timeout}ms / arrêt {stop} min",
    log_tip="Astuce : avant de commencer, coupez la musique et les sons ambiants, tenez la canne et gardez la ligne remontée.",
@@ -623,9 +712,13 @@ _L("fr",
    hk_fail="Échec de l'enregistrement du raccourci (probablement utilisé par un autre programme). Changez de touche ou désactivez les raccourcis.",
    hk_fail_stop="Échec de l'enregistrement de la touche d'arrêt (probablement utilisée). Changez de touche.",
    st_starting_bot="Démarrage...", st_stopping_bot="Arrêt...",
+   set_autokeyms="Intervalle potion auto (ms) :", chk_autokey="Activer la potion auto", lbl_autokey="Touche potion :",
+   log_autokey="Potion auto : touche {key} pressée (n° {c}, toutes les {n} ms)",
+   log_potion_active="Potion auto active : touche {key} toutes les {n} ms (uniquement pendant la pêche)",
+   lbl_potion_count="Potions bues :",
 )
 _L("es",
-   app_title="Bot de pesca automático v1.1",
+   app_title="Bot de pesca automático v1.2",
    grp_status="Estado del juego", grp_settings="Ajustes de pesca", grp_run="Estado de ejecución", grp_log="Registro",
    lbl_proc="Proceso del juego:", lbl_sess="Pista de audio:", lbl_vu="Volumen:",
    st_proc_off="Proceso del juego no detectado (inicia el juego primero)", st_proc_on="Proceso del juego detectado",
@@ -638,7 +731,7 @@ _L("es",
    chk_right="Usar clic derecho (izquierdo por defecto)", chk_top="Siempre visible", chk_hotkey="Activar atajos",
    lbl_hk_start="Tecla inicio:", lbl_hk_stop="Tecla parada:",
    lbl_state="Estado:", st_idle='Inactivo: pulsa F9 o haz clic en "Iniciar pesca"',
-   stats="Lanzamientos: {cast}    Peces: {fish}    Tiempo: {time}",
+   stats="Lanzamientos: {cast}    Peces: {fish}    Pociones: {pot}    Tiempo: {time}",
    btn_start="Iniciar pesca", btn_stop="Detener", btn_running="Ejecutando...",
    btn_no_game="Juego no detectado...", btn_stopping="Deteniendo...",
    btn_start_hk="Iniciar pesca ({name})", btn_stop_hk="Detener ({name})",
@@ -675,9 +768,9 @@ _L("es",
    log_recast="Lanzado de nuevo (lanzamiento n.º {n}).",
    log_timeout="Sin picadas durante {n} ms. Recogiendo y lanzando de nuevo...",
    log_stop_cmd="Comando de parada recibido.",
-   log_end="══════════ Sesión terminada: {c} lanzamientos, {f} peces, {t} segundos ══════════",
+   log_end="══════════ Sesión terminada: {c} lanzamientos, {f} peces, {p} pociones, {t} segundos ══════════",
    st_stopped="Detenido",
-   log_ready="Terraria Bot de pesca automático v1.1 (Python, multilingüe) listo.",
+   log_ready="Terraria Bot de pesca automático v1.2 (Python, multilingüe) listo.",
    log_listen="Procesos vigilados: {p}",
    log_params="Parámetros: inicio {start}ms / recogida {pull}ms / lanzamiento {cast}ms / silencio {noise}ms / sensibilidad {sens} / tiempo límite {timeout}ms / parada {stop} min",
    log_tip="Consejo: antes de empezar, apaga la música y los sonidos ambientales, sujeta la caña y mantén el sedal recogido.",
@@ -688,9 +781,13 @@ _L("es",
    hk_fail="Error al registrar el atajo (probablemente en uso por otro programa). Cambia la tecla o desactiva los atajos.",
    hk_fail_stop="Error al registrar la tecla de parada (probablemente en uso). Cambia la tecla.",
    st_starting_bot="Iniciando...", st_stopping_bot="Deteniendo...",
+   set_autokeyms="Intervalo de poción automática (ms):", chk_autokey="Activar poción automática", lbl_autokey="Tecla poción:",
+   log_autokey="Poción automática: tecla {key} pulsada (n.º {c}, cada {n} ms)",
+   log_potion_active="Poción automática activa: tecla {key} cada {n} ms (solo mientras se pesca)",
+   lbl_potion_count="Pulsaciones de poción:",
 )
 _L("ru",
-   app_title="Автоматический рыболовный бот v1.1",
+   app_title="Автоматический рыболовный бот v1.2",
    grp_status="Состояние игры", grp_settings="Настройки рыбалки", grp_run="Состояние работы", grp_log="Журнал",
    lbl_proc="Процесс игры:", lbl_sess="Аудиоканал:", lbl_vu="Громкость:",
    st_proc_off="Процесс игры не найден (сначала запустите игру)", st_proc_on="Процесс игры обнаружен",
@@ -703,7 +800,7 @@ _L("ru",
    chk_right="Правая кнопка мыши (по умолчанию левая)", chk_top="Поверх окон", chk_hotkey="Включить горячие клавиши",
    lbl_hk_start="Клавиша старта:", lbl_hk_stop="Клавиша стопа:",
    lbl_state="Состояние:", st_idle='Ожидание: нажмите F9 или кнопку «Начать рыбалку»',
-   stats="Забросов: {cast}    Рыб: {fish}    Время: {time}",
+   stats="Забросов: {cast}    Рыб: {fish}    Зелий: {pot}    Время: {time}",
    btn_start="Начать рыбалку", btn_stop="Стоп", btn_running="Работает...",
    btn_no_game="Игра не найдена...", btn_stopping="Остановка...",
    btn_start_hk="Начать рыбалку ({name})", btn_stop_hk="Стоп ({name})",
@@ -740,9 +837,9 @@ _L("ru",
    log_recast="Новый заброс (заброс №{n}).",
    log_timeout="Поклёвок нет уже {n} мс. Подсечка и новый заброс...",
    log_stop_cmd="Получена команда остановки.",
-   log_end="══════════ Сессия завершена: забросов {c}, рыб {f}, время {t} с ══════════",
+   log_end="══════════ Сессия завершена: забросов {c}, рыб {f}, зелий {p}, время {t} с ══════════",
    st_stopped="Остановлено",
-   log_ready="Terraria: автоматический рыболовный бот v1.1 (Python, мультиязычный) готов.",
+   log_ready="Terraria: автоматический рыболовный бот v1.2 (Python, мультиязычный) готов.",
    log_listen="Наблюдаемые процессы: {p}",
    log_params="Параметры: запуск {start}мс / подсечка {pull}мс / заброс {cast}мс / тишина {noise}мс / чувствительность {sens} / таймаут {timeout}мс / автостоп {stop} мин",
    log_tip="Совет: перед началом выключите музыку и фоновые звуки, держите удочку и смотанную леску.",
@@ -753,9 +850,13 @@ _L("ru",
    hk_fail="Не удалось зарегистрировать горячую клавишу (вероятно, занята другой программой). Смените клавишу или отключите горячие клавиши.",
    hk_fail_stop="Не удалось зарегистрировать клавишу стопа (вероятно, занята). Смените клавишу.",
    st_starting_bot="Запуск...", st_stopping_bot="Остановка...",
+   set_autokeyms="Интервал автозелья (мс):", chk_autokey="Включить автозелье", lbl_autokey="Клавиша зелья:",
+   log_autokey="Автозелье: нажата клавиша {key} (раз {c}, каждые {n} мс)",
+   log_potion_active="Автозелье активно: клавиша {key} каждые {n} мс (только во время рыбалки)",
+   lbl_potion_count="Нажатий зелья:",
 )
 _L("pt_br",
-   app_title="Bot de Pesca Automático v1.1",
+   app_title="Bot de Pesca Automático v1.2",
    grp_status="Status do jogo", grp_settings="Configurações de pesca", grp_run="Status de execução", grp_log="Registro",
    lbl_proc="Processo do jogo:", lbl_sess="Trilha de áudio:", lbl_vu="Volume:",
    st_proc_off="Processo do jogo não detectado (inicie o jogo primeiro)", st_proc_on="Processo do jogo detectado",
@@ -768,7 +869,7 @@ _L("pt_br",
    chk_right="Usar clique direito (esquerdo por padrão)", chk_top="Sempre no topo", chk_hotkey="Ativar atalhos",
    lbl_hk_start="Tecla iniciar:", lbl_hk_stop="Tecla parar:",
    lbl_state="Status:", st_idle='Ocioso: pressione F9 ou clique em "Iniciar pesca"',
-   stats="Lançamentos: {cast}    Peixes: {fish}    Tempo: {time}",
+   stats="Lançamentos: {cast}    Peixes: {fish}    Poções: {pot}    Tempo: {time}",
    btn_start="Iniciar pesca", btn_stop="Parar", btn_running="Executando...",
    btn_no_game="Jogo não detectado...", btn_stopping="Parando...",
    btn_start_hk="Iniciar pesca ({name})", btn_stop_hk="Parar ({name})",
@@ -805,9 +906,9 @@ _L("pt_br",
    log_recast="Lançado novamente (lançamento nº {n}).",
    log_timeout="Sem fisgadas por {n} ms. Puxando e lançando novamente...",
    log_stop_cmd="Comando de parada recebido.",
-   log_end="══════════ Sessão encerrada: {c} lançamentos, {f} peixes, {t} segundos ══════════",
+   log_end="══════════ Sessão encerrada: {c} lançamentos, {f} peixes, {p} poções, {t} segundos ══════════",
    st_stopped="Parado",
-   log_ready="Terraria Bot de Pesca Automático v1.1 (Python, multilíngue) pronto.",
+   log_ready="Terraria Bot de Pesca Automático v1.2 (Python, multilíngue) pronto.",
    log_listen="Processos monitorados: {p}",
    log_params="Parâmetros: início {start}ms / puxar {pull}ms / lançar {cast}ms / silêncio {noise}ms / sensibilidade {sens} / tempo limite {timeout}ms / parada {stop} min",
    log_tip="Dica: antes de começar, desligue música e sons ambientes, segure a vara e mantenha a linha recolhida.",
@@ -818,9 +919,13 @@ _L("pt_br",
    hk_fail="Falha ao registrar o atalho (provavelmente em uso por outro programa). Troque a tecla ou desative os atalhos.",
    hk_fail_stop="Falha ao registrar a tecla de parar (provavelmente em uso). Troque a tecla.",
    st_starting_bot="Iniciando...", st_stopping_bot="Parando...",
+   set_autokeyms="Intervalo da poção automática (ms):", chk_autokey="Ativar poção automática", lbl_autokey="Tecla poção:",
+   log_autokey="Poção automática: tecla {key} pressionada (nº {c}, a cada {n} ms)",
+   log_potion_active="Poção automática ativa: tecla {key} a cada {n} ms (somente durante a pesca)",
+   lbl_potion_count="Poções usadas:",
 )
 _L("pl",
-   app_title="Automatyczny Bot Wędkarski v1.1",
+   app_title="Automatyczny Bot Wędkarski v1.2",
    grp_status="Status gry", grp_settings="Ustawienia wędkowania", grp_run="Status działania", grp_log="Dziennik",
    lbl_proc="Proces gry:", lbl_sess="Ścieżka audio:", lbl_vu="Głośność:",
    st_proc_off="Nie wykryto procesu gry (najpierw uruchom grę)", st_proc_on="Wykryto proces gry",
@@ -833,7 +938,7 @@ _L("pl",
    chk_right="Użyj prawego klawisza (domyślnie lewy)", chk_top="Zawsze na wierzchu", chk_hotkey="Włącz skróty",
    lbl_hk_start="Klawisz startu:", lbl_hk_stop="Klawisz stopu:",
    lbl_state="Status:", st_idle='Bezczynny: naciśnij F9 lub kliknij "Rozpocznij wędkowanie"',
-   stats="Rzuty: {cast}    Ryby: {fish}    Czas: {time}",
+   stats="Rzuty: {cast}    Ryby: {fish}    Mikstury: {pot}    Czas: {time}",
    btn_start="Rozpocznij wędkowanie", btn_stop="Stop", btn_running="Działa...",
    btn_no_game="Nie wykryto gry...", btn_stopping="Zatrzymywanie...",
    btn_start_hk="Rozpocznij wędkowanie ({name})", btn_stop_hk="Stop ({name})",
@@ -870,9 +975,9 @@ _L("pl",
    log_recast="Zarzucono ponownie (rzut nr {n}).",
    log_timeout="Brak brań od {n} ms. Zwinięcie i ponowne zarzucenie...",
    log_stop_cmd="Otrzymano polecenie zatrzymania.",
-   log_end="══════════ Sesja zakończona: rzutów {c}, ryb {f}, czas {t} s ══════════",
+   log_end="══════════ Sesja zakończona: rzutów {c}, ryb {f}, mikstur {p}, czas {t} s ══════════",
    st_stopped="Zatrzymano",
-   log_ready="Terraria Automatyczny Bot Wędkarski v1.1 (Python, wielojęzyczny) gotowy.",
+   log_ready="Terraria Automatyczny Bot Wędkarski v1.2 (Python, wielojęzyczny) gotowy.",
    log_listen="Monitorowane procesy: {p}",
    log_params="Parametry: start {start}ms / zwijanie {pull}ms / zarzucanie {cast}ms / cisza {noise}ms / czułość {sens} / limit {timeout}ms / auto-stop {stop} min",
    log_tip="Wskazówka: przed startem wyłącz muzykę i dźwięki otoczenia, trzymaj wędkę i zwiniętą żyłkę.",
@@ -883,9 +988,13 @@ _L("pl",
    hk_fail="Nie udało się zarejestrować skrótu (prawdopodobnie zajęty przez inny program). Zmień klawisz lub wyłącz skróty.",
    hk_fail_stop="Nie udało się zarejestrować klawisza stopu (prawdopodobnie zajęty). Zmień klawisz.",
    st_starting_bot="Uruchamianie...", st_stopping_bot="Zatrzymywanie...",
+   set_autokeyms="Interwał auto-mikstury (ms):", chk_autokey="Włącz auto-miksturę", lbl_autokey="Klawisz mikstury:",
+   log_autokey="Auto-mikstura: naciśnięto {key} (nr {c}, co {n} ms)",
+   log_potion_active="Auto-mikstura aktywna: klawisz {key} co {n} ms (tylko podczas wędkowania)",
+   lbl_potion_count="Użyć mikstury:",
 )
 _L("ja",
-   app_title="自動釣りボット v1.1",
+   app_title="自動釣りボット v1.2",
    grp_status="ゲーム状態", grp_settings="釣り設定", grp_run="実行状態", grp_log="ログ",
    lbl_proc="ゲームプロセス:", lbl_sess="オーディオトラック:", lbl_vu="音量:",
    st_proc_off="ゲームプロセス未検出（先にゲームを起動してください）", st_proc_on="ゲームプロセスを検出",
@@ -898,7 +1007,7 @@ _L("ja",
    chk_right="右クリックを使用（デフォルトは左）", chk_top="常に最前面", chk_hotkey="ホットキーを有効化",
    lbl_hk_start="開始キー:", lbl_hk_stop="停止キー:",
    lbl_state="状態:", st_idle='待機中: F9または「釣り開始」をクリック',
-   stats="キャスト: {cast}    釣果: {fish}    時間: {time}",
+   stats="キャスト: {cast}    釣果: {fish}    ポーション: {pot}    時間: {time}",
    btn_start="釣り開始", btn_stop="停止", btn_running="実行中...",
    btn_no_game="ゲーム未検出...", btn_stopping="停止中...",
    btn_start_hk="釣り開始 ({name})", btn_stop_hk="停止 ({name})",
@@ -935,9 +1044,9 @@ _L("ja",
    log_recast="再キャスト（{n} 回目）。",
    log_timeout="{n}ms バイトなし。巻き取って再キャスト...",
    log_stop_cmd="停止指示を受信しました。",
-   log_end="══════════ セッション終了: キャスト {c} 回、釣果 {f} 匹、時間 {t} 秒 ══════════",
+   log_end="══════════ セッション終了: キャスト {c} 回、釣果 {f} 匹、ポーション {p} 回、時間 {t} 秒 ══════════",
    st_stopped="停止済み",
-   log_ready="Terraria 自動釣りボット v1.1（Python多言語版）の準備ができました。",
+   log_ready="Terraria 自動釣りボット v1.2（Python多言語版）の準備ができました。",
    log_listen="監視プロセス: {p}",
    log_params="パラメータ: 開始遅延 {start}ms / 巻き取り {pull}ms / キャスト {cast}ms / 静音 {noise}ms / 感度 {sens} / タイムアウト {timeout}ms / 自動停止 {stop}分",
    log_tip="ヒント: 開始前にゲーム内の音楽と環境音をオフにし、釣竿を持ち、釣り糸を巻き取っておいてください。",
@@ -948,9 +1057,13 @@ _L("ja",
    hk_fail="ホットキーの登録に失敗しました（他のプログラムが使用中の可能性）。キーを変更するかホットキーを無効にしてください。",
    hk_fail_stop="停止キーの登録に失敗しました（使用中の可能性）。キーを変更してください。",
    st_starting_bot="起動中...", st_stopping_bot="停止中...",
+   set_autokeyms="自動ポーション間隔(ms):", chk_autokey="自動ポーションを有効化", lbl_autokey="ポーションキー:",
+   log_autokey="自動ポーション: キー {key} を押しました（{c} 回目、{n}ms ごと）",
+   log_potion_active="自動ポーション有効: {n}ms ごとに {key} を押します（釣り実行中のみ）",
+   lbl_potion_count="ポーション回数:",
 )
 _L("ko",
-   app_title="자동 낚시 봇 v1.1",
+   app_title="자동 낚시 봇 v1.2",
    grp_status="게임 상태", grp_settings="낚시 설정", grp_run="실행 상태", grp_log="로그",
    lbl_proc="게임 프로세스:", lbl_sess="오디오 트랙:", lbl_vu="음량:",
    st_proc_off="게임 프로세스를 찾을 수 없음(게임을 먼저 실행하세요)", st_proc_on="게임 프로세스 감지됨",
@@ -963,7 +1076,7 @@ _L("ko",
    chk_right="오른쪽 클릭 사용(기본 왼쪽)", chk_top="항상 위", chk_hotkey="단축키 사용",
    lbl_hk_start="시작 키:", lbl_hk_stop="중지 키:",
    lbl_state="상태:", st_idle='대기 중: F9 또는 "낚시 시작" 클릭',
-   stats="던짐: {cast}    잡은 물고기: {fish}    시간: {time}",
+   stats="던짐: {cast}    잡은 물고기: {fish}    물약: {pot}    시간: {time}",
    btn_start="낚시 시작", btn_stop="중지", btn_running="실행 중...",
    btn_no_game="게임 감지 안 됨...", btn_stopping="중지 중...",
    btn_start_hk="낚시 시작 ({name})", btn_stop_hk="중지 ({name})",
@@ -1000,9 +1113,9 @@ _L("ko",
    log_recast="다시 던짐({n}회차).",
    log_timeout="{n}ms 동안 입질 없음. 낚아채고 다시 던짐...",
    log_stop_cmd="중지 명령을 받았습니다.",
-   log_end="══════════ 세션 종료: 던짐 {c}회, 물고기 {f}마리, 시간 {t}초 ══════════",
+   log_end="══════════ 세션 종료: 던짐 {c}회, 물고기 {f}마리, 물약 {p}회, 시간 {t}초 ══════════",
    st_stopped="중지됨",
-   log_ready="Terraria 자동 낚시 봇 v1.1(Python 다국어) 준비 완료.",
+   log_ready="Terraria 자동 낚시 봇 v1.2(Python 다국어) 준비 완료.",
    log_listen="감시 프로세스: {p}",
    log_params="파라미터: 시작 지연 {start}ms / 낚아채기 {pull}ms / 던지기 {cast}ms / 침묵 {noise}ms / 감도 {sens} / 시간초과 {timeout}ms / 자동 중지 {stop}분",
    log_tip="팁: 시작 전에 게임 음악과 환경음을 끄고, 낚싯대를 들고, 낚싯줄을 감아 두세요.",
@@ -1013,9 +1126,13 @@ _L("ko",
    hk_fail="단축키 등록 실패(다른 프로그램이 사용 중일 수 있음). 키를 바꾸거나 단축키를 끄세요.",
    hk_fail_stop="중지 키 등록 실패(사용 중일 수 있음). 키를 바꾸세요.",
    st_starting_bot="시작 중...", st_stopping_bot="중지 중...",
+   set_autokeyms="자동 물약 간격(ms):", chk_autokey="자동 물약 사용", lbl_autokey="물약 키:",
+   log_autokey="자동 물약: {key} 키를 눌렀습니다({c}회째, {n}ms마다)",
+   log_potion_active="자동 물약 활성화: {n}ms마다 {key} 키를 누릅니다(낚시 실행 중에만)",
+   lbl_potion_count="물약 횟수:",
 )
 _L("zh_tw",
-   app_title="自動釣魚機器人 v1.1",
+   app_title="自動釣魚機器人 v1.2",
    grp_status="遊戲狀態", grp_settings="釣魚設定", grp_run="執行狀態", grp_log="執行日誌",
    lbl_proc="遊戲進程:", lbl_sess="音訊軌道:", lbl_vu="目前音量:",
    st_proc_off="未偵測到遊戲進程（請先啟動遊戲）", st_proc_on="已偵測到遊戲進程",
@@ -1028,7 +1145,7 @@ _L("zh_tw",
    chk_right="使用右鍵點擊（預設左鍵）", chk_top="視窗置頂", chk_hotkey="啟用快捷鍵",
    lbl_hk_start="開始鍵:", lbl_hk_stop="停止鍵:",
    lbl_state="狀態:", st_idle="閒置：按 F9 或點擊「開始釣魚」",
-   stats="拋竿次數: {cast}    魚獲(收線): {fish}    執行時間: {time}",
+   stats="拋竿次數: {cast}    魚獲(收線): {fish}    藥水鍵次數: {pot}    執行時間: {time}",
    btn_start="開始釣魚", btn_stop="停止", btn_running="執行中...",
    btn_no_game="未偵測到遊戲...", btn_stopping="正在停止...",
    btn_start_hk="開始釣魚 ({name})", btn_stop_hk="停止 ({name})",
@@ -1065,9 +1182,9 @@ _L("zh_tw",
    log_recast="已重新拋竿（第 {n} 次拋竿）。",
    log_timeout="超過 {n} 毫秒無咬鉤，收回魚線並重新拋竿...",
    log_stop_cmd="收到停止指令。",
-   log_end="══════════ 本輪結束：共拋竿 {c} 次，收線 {f} 次，用時 {t} 秒 ══════════",
+   log_end="══════════ 本輪結束：共拋竿 {c} 次，收線 {f} 次，喝藥水 {p} 次，用時 {t} 秒 ══════════",
    st_stopped="已停止",
-   log_ready="Terraria 自動釣魚機器人 v1.1（Python 多語言版）已就緒。",
+   log_ready="Terraria 自動釣魚機器人 v1.2（Python 多語言版）已就緒。",
    log_listen="監聽進程: {p}",
    log_params="參數: 啟動延遲 {start}ms / 收線延遲 {pull}ms / 拋竿延遲 {cast}ms / 靜默 {noise}ms / 靈敏度 {sens} / 超時 {timeout}ms / 定時停止 {stop} 分鐘",
    log_tip="提示：開始前請在遊戲內關閉音樂與環境音，手持魚竿，並保持魚線已收回。",
@@ -1078,6 +1195,10 @@ _L("zh_tw",
    hk_fail="快捷鍵註冊失敗（可能被其他程式占用），請更換按鍵或關閉快捷鍵。",
    hk_fail_stop="停止快捷鍵註冊失敗（可能被其他程式占用），請更換按鍵。",
    st_starting_bot="正在啟動...", st_stopping_bot="正在停止...",
+   set_autokeyms="自動喝藥水間隔(毫秒):", chk_autokey="啟用自動喝藥水", lbl_autokey="藥水鍵:",
+   log_autokey="已自動按下藥水鍵 {key}（第 {c} 次，間隔 {n} 毫秒）",
+   log_potion_active="自動喝藥水已啟動：每 {n} 毫秒按一次藥水鍵 {key}（僅釣魚執行期間）",
+   lbl_potion_count="藥水鍵次數:",
 )
 
 TRANS = _TR
@@ -1340,6 +1461,9 @@ DEFAULTS = {
     "hotkeys": 1,          # 1=启用快捷键
     "hotkeystart": "F9",   # 开始钓鱼快捷键
     "hotkeystop": "F10",   # 停止快捷键
+    "autokey": 0,          # 1=启用自动喝药水
+    "autokeychar": "N",    # 喝钓鱼药水的快捷键字母（A~Z，默认 N）
+    "autokeyms": 245000,   # 自动喝药水间隔毫秒（默认 4分5秒）
     "lang": "zh_cn",       # 界面语言
     "procnames": "Terraria;tModLoader;javaw",
 }
@@ -1351,7 +1475,7 @@ def load_config():
         if os.path.exists(INI_PATH):
             cp.read(INI_PATH, encoding="utf-8")
             for k in cfg:
-                if k in ("procnames", "hotkeystart", "hotkeystop", "lang"):
+                if k in ("procnames", "hotkeystart", "hotkeystop", "autokeychar", "lang"):
                     v = cp.get("Settings", k, fallback=DEFAULTS[k])
                     cfg[k] = v.strip() or DEFAULTS[k]
                 else:
@@ -1392,6 +1516,10 @@ shared = {
     "hotkey_enabled": True,
     "hotkey_start_vk": VK_F9,
     "hotkey_stop_vk": VK_F10,
+    "autokey_enabled": False,
+    "autokey_ms": 245000,      # 默认 4分5秒 = 245000 毫秒
+    "autokey_vk": 0x4E,        # 默认字母 N（喝钓鱼药水快捷键）
+    "potion_count": 0,         # 药水键次数（仅运行期间累计，不保存）
 }
 shared_lock = threading.Lock()
 
@@ -1495,6 +1623,52 @@ def hotkey_thread():
         user32.UnregisterHotKey(None, 2)
 
 # ============================================================================
+# 七点五、自动喝药水线程（钓鱼机器人运行时，按设定间隔按下喝药水的快捷键）
+# ============================================================================
+
+def auto_potion_thread():
+    """自动喝药水线程：仅在【钓鱼机器人正在运行且游戏进程存在】时，
+       按设定间隔模拟按下 A~Z 中的一个字母键（默认 N = 喝钓鱼药水快捷键）。
+       开关只决定是否按下；机器人未开始 / 已点击停止 / 游戏退出时不执行。
+       启动与每次按键都会写入运行日志（与其他日志格式一致）；
+       按键发送成功后药水键次数 +1（点击开始/停止不清零，仅退出程序时清空）。"""
+    last_t = time.monotonic()
+    last_sig = None
+    was_active = False
+    while not evt_quit.is_set():
+        try:
+            with shared_lock:
+                enabled = bool(shared.get("autokey_enabled", False))
+                interval = int(shared.get("autokey_ms", 245000))
+                key_vk = int(shared.get("autokey_vk", 0x4E))
+                running = shared["running"]
+                proc_found = shared["proc_found"]
+            sig = (enabled, interval, key_vk)
+            if sig != last_sig:
+                last_sig = sig
+                last_t = time.monotonic()   # 配置变化后重新计时
+            # 与钓鱼机器人线程一致：仅在运行中、未点击停止且游戏进程存在时执行
+            can_run = (enabled and interval > 0 and key_vk and running
+                       and proc_found and not evt_stop.is_set())
+            if can_run != was_active:
+                was_active = can_run
+                if can_run:
+                    last_t = time.monotonic()   # 每次进入活跃状态都重新计时
+                    name = chr(key_vk) if 0x41 <= key_vk <= 0x5A else "?"
+                    put_log(T("log_potion_active", key=name, n=interval))
+            if can_run and time.monotonic() - last_t >= interval / 1000.0:
+                last_t = time.monotonic()
+                if press_key(key_vk):
+                    with shared_lock:
+                        shared["potion_count"] += 1
+                        cnt = shared["potion_count"]
+                    name = chr(key_vk) if 0x41 <= key_vk <= 0x5A else "?"
+                    put_log(T("log_autokey", key=name, n=interval, c=cnt))
+        except Exception:
+            pass   # 任何异常都不能杀死线程
+        time.sleep(0.2)
+
+# ============================================================================
 # 八、钓鱼机器人线程（核心循环）
 # ============================================================================
 
@@ -1511,6 +1685,8 @@ def bot_thread(cfg):
     start_t = time.monotonic()
     try:
         proc_list = cfg["procnames"]
+        with shared_lock:
+            pot_start = shared["potion_count"]   # 记录本轮开始前的药水键累计次数
         put_log(T("log_start"))
         put_log(T("log_start_delay", n=cfg["startdelay"]))
         put_status(T("st_starting", n=cfg["startdelay"]))
@@ -1606,8 +1782,9 @@ def bot_thread(cfg):
             shared["elapsed"] = int(time.monotonic() - start_t)
             fish_n = shared["fish"]
             cast_n = shared["cast"]
+            pot_n = shared["potion_count"] - pot_start   # 本轮喝药水次数
             el = shared["elapsed"]
-        put_log(T("log_end", c=cast_n, f=fish_n, t=el))
+        put_log(T("log_end", c=cast_n, f=fish_n, p=pot_n, t=el))
         put_status(T("st_stopped"))
     finally:
         with shared_lock:
@@ -1637,6 +1814,10 @@ class App:
             shared["hotkey_enabled"] = bool(self.cfg["hotkeys"])
             shared["hotkey_start_vk"] = vk_from_name(self.cfg["hotkeystart"]) or VK_F9
             shared["hotkey_stop_vk"] = vk_from_name(self.cfg["hotkeystop"]) or VK_F10
+            shared["autokey_enabled"] = bool(self.cfg["autokey"])
+            shared["autokey_ms"] = int(self.cfg["autokeyms"])
+            ch = str(self.cfg.get("autokeychar", "N")).strip().upper()
+            shared["autokey_vk"] = ord(ch[0]) if ch and "A" <= ch[0] <= "Z" else 0x4E
 
         root.title(app_title())
         root.resizable(True, True)   # 支持最大化窗口
@@ -1662,11 +1843,12 @@ class App:
         # 后台线程
         t1 = threading.Thread(target=monitor_thread, daemon=True)
         t2 = threading.Thread(target=hotkey_thread, daemon=True)
-        t1.start(); t2.start()
-        self.threads = [t1, t2]
+        t3 = threading.Thread(target=auto_potion_thread, daemon=True)
+        t1.start(); t2.start(); t3.start()
+        self.threads = [t1, t2, t3]
 
         self._last = {"proc": -1, "sess": -1, "vu": -1, "fish": -1, "cast": -1,
-                      "elapsed": -1, "ui": -1, "hk": None, "status": ""}
+                      "elapsed": -1, "ui": -1, "hk": None, "pot": -1, "status": ""}
         self.poll()
 
     # ---------- 界面构建 ----------
@@ -1699,6 +1881,7 @@ class App:
             ("set_noise", "noisedelay", 1000, (0, 60000, 100)),
             ("set_sens", "vusens", 5, (0, 100, 2)),
             ("set_timeout", "timeoutms", 120000, (0, 600000, 1000)),
+            ("set_autokeyms", "autokeyms", 245000, (60000, 86400000, 60000)),
             ("set_autostop", "autostopmin", 0, (0, 9999, 1)),
         ]
         self.entries = {}
@@ -1725,7 +1908,7 @@ class App:
         tk.Label(f3, text=T("lbl_state"), font=self.font).grid(row=0, column=0, sticky="w", **pad)
         self.status_var = tk.StringVar(value=T("st_idle"))
         tk.Label(f3, textvariable=self.status_var, font=self.font).grid(row=0, column=1, sticky="w", **pad)
-        self.stats_var = tk.StringVar(value=T("stats", cast=0, fish=0, time="00:00:00"))
+        self.stats_var = tk.StringVar(value=T("stats", cast=0, fish=0, pot=0, time="00:00:00"))
         tk.Label(f3, textvariable=self.stats_var, font=self.font).grid(row=1, column=0, columnspan=2, sticky="w", **pad)
 
         # 按钮行
@@ -1762,6 +1945,18 @@ class App:
         self.cmb_hotkey_stop.set(str(self.cfg.get("hotkeystop", "F10")))
         self.cmb_hotkey_stop.pack(side="left")
 
+        # 自动喝药水设置（位于开始/停止快捷键下方对齐）
+        fa = tk.Frame(self.root)
+        fa.pack(fill="x", padx=8, pady=(0, 4))
+        self.var_autokey = tk.IntVar(value=int(self.cfg["autokey"]))
+        tk.Checkbutton(fa, text=T("chk_autokey"), variable=self.var_autokey,
+                       font=self.font_small).pack(side="left", padx=4)
+        tk.Label(fa, text=T("lbl_autokey"), font=self.font_small).pack(side="left")
+        self.cmb_autokey = ttk.Combobox(fa, values=[chr(65 + i) for i in range(26)], width=4,
+                                        font=self.font_small)
+        self.cmb_autokey.set(str(self.cfg.get("autokeychar", "N")))
+        self.cmb_autokey.pack(side="left")
+
         # 组框 4：运行日志
         f4 = tk.LabelFrame(self.root, text=f" {T('grp_log')} ", font=self.font)
         f4.pack(fill="both", expand=True, padx=8, pady=4)
@@ -1781,7 +1976,7 @@ class App:
         self._hint_labels = [h1, h2, h3, h4]
 
         # 参与窗口自适应宽度计算的控件（日志区可滚动、底部提示自动换行，均不参与）
-        self._size_controls = [f1, f2, f3, fb, fh]
+        self._size_controls = [f1, f2, f3, fb, fh, fa]
 
     # ---------- 日志/状态 ----------
     def put_log(self, text):
@@ -1802,6 +1997,16 @@ class App:
         for k, e in self.entries.items():
             if k == "procnames":
                 cfg[k] = e.get().strip() or DEFAULTS[k]
+            elif k == "autokeyms":
+                # 喝药水间隔无效时保留原设置，绝不用 245000 覆盖玩家保存的值
+                try:
+                    v = int(e.get().strip())
+                    if v >= 1000:
+                        cfg[k] = v
+                        continue
+                except ValueError:
+                    pass
+                cfg[k] = self.cfg.get("autokeyms", DEFAULTS["autokeyms"])
             else:
                 try:
                     cfg[k] = int(e.get().strip())
@@ -1811,6 +2016,8 @@ class App:
         cfg["hotkeys"] = int(self.var_hotkey.get())
         cfg["hotkeystart"] = self.cmb_hotkey_start.get().strip() or DEFAULTS["hotkeystart"]
         cfg["hotkeystop"] = self.cmb_hotkey_stop.get().strip() or DEFAULTS["hotkeystop"]
+        cfg["autokey"] = int(self.var_autokey.get())
+        cfg["autokeychar"] = self.cmb_autokey.get().strip().upper() or DEFAULTS["autokeychar"]
         cfg["lang"] = CURRENT_LANG   # 语言不在界面读取，保留当前语言，避免保存时被覆盖
         return cfg
 
@@ -1968,6 +2175,8 @@ class App:
         self.var_hotkey.set(int(cur.get("hotkeys", 1)))
         self.cmb_hotkey_start.set(cur.get("hotkeystart", "F9"))
         self.cmb_hotkey_stop.set(cur.get("hotkeystop", "F10"))
+        self.var_autokey.set(int(cur.get("autokey", 0)))
+        self.cmb_autokey.set(cur.get("autokeychar", "N"))
         # 恢复日志
         if log_text:
             self.txt_log.configure(state="normal")
@@ -1989,7 +2198,7 @@ class App:
             self.status_var.set(T("st_idle"))
         # 重置界面缓存，让 poll 下一拍全部重新刷新
         self._last = {"proc": -1, "sess": -1, "vu": -1, "fish": -1, "cast": -1,
-                      "elapsed": -1, "ui": -1, "hk": None, "status": ""}
+                      "elapsed": -1, "ui": -1, "hk": None, "pot": -1, "status": ""}
         # 窗口自适应到刚好容纳新语言文本的大小
         self._fit_window()
 
@@ -2014,6 +2223,34 @@ class App:
             self.cfg["hotkeystop"] = self.cmb_hotkey_stop.get().strip() or DEFAULTS["hotkeystop"]
             save_config(self.cfg)
 
+    def _sync_autopotion(self):
+        """把自动喝药水设置同步到 shared（自动喝药水线程立即生效），有变化时保存。
+           间隔时间以界面/ini 的实际值为准；输入无效时直接跳过同步，
+           绝不用 245000 覆盖玩家设置（245000 只是首次无配置文件时的默认值）。"""
+        enabled = int(self.var_autokey.get())
+        ch = self.cmb_autokey.get().strip().upper()
+        vk = ord(ch[0]) if ch and "A" <= ch[0] <= "Z" else 0x4E
+        try:
+            interval = int(self.entries["autokeyms"].get().strip())
+        except (ValueError, KeyError):
+            return   # 输入无效：保持现状，不用默认值覆盖
+        if interval < 1000:
+            return   # 间隔必须 ≥ 1000ms：保持现状
+        with shared_lock:
+            cur = (bool(shared.get("autokey_enabled", False)),
+                   int(shared.get("autokey_ms", 245000)),
+                   int(shared.get("autokey_vk", 0x4E)))
+        new = (bool(enabled), interval, vk)
+        if new != cur:
+            with shared_lock:
+                shared["autokey_enabled"] = bool(enabled)
+                shared["autokey_ms"] = interval
+                shared["autokey_vk"] = vk
+            self.cfg["autokey"] = enabled
+            self.cfg["autokeychar"] = ch or "N"
+            self.cfg["autokeyms"] = interval
+            save_config(self.cfg)
+
     def _start_btn_text(self):
         with shared_lock:
             enabled = bool(shared.get("hotkey_enabled", True))
@@ -2031,6 +2268,7 @@ class App:
     # ---------- 主循环轮询（100ms，全部 tkinter 操作都在主线程） ----------
     def poll(self):
         self._sync_hotkeys()
+        self._sync_autopotion()
         # 处理工作线程发来的消息
         while True:
             try:
@@ -2060,6 +2298,7 @@ class App:
             vu = shared["vu_pct"]
             fish = shared["fish"]
             cast = shared["cast"]
+            pot = shared["potion_count"]
             start_t = shared["start_t"]
             elapsed = shared["elapsed"]
 
@@ -2079,12 +2318,13 @@ class App:
             L["vu"] = vu
         if running:
             elapsed = int(time.monotonic() - start_t)
-        if fish != L["fish"] or cast != L["cast"] or elapsed != L["elapsed"]:
+        if fish != L["fish"] or cast != L["cast"] or pot != L["pot"] or elapsed != L["elapsed"]:
             self.stats_var.set(
-                T("stats", cast=cast, fish=fish,
+                T("stats", cast=cast, fish=fish, pot=pot,
                   time=f"{elapsed//3600:02d}:{elapsed//60%60:02d}:{elapsed%60:02d}"))
             L["fish"] = fish
             L["cast"] = cast
+            L["pot"] = pot
             L["elapsed"] = elapsed
 
         # 按钮与设置区联动
