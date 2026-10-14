@@ -1,4 +1,4 @@
-# 泰拉瑞亚自动钓鱼机器人（多语言版）v1.1
+# 泰拉瑞亚自动钓鱼机器人（多语言版）v1.2
 
 一个**多语言界面**的泰拉瑞亚（Terraria）全自动钓鱼机器人。
 
@@ -15,6 +15,8 @@
 **简体中文/English/Deutsch/Italiano/Français/Español/Русский/Português (Brasil)/Polski/日本語/한국어/繁體中文**
 
 程序界面会自动匹配文本大小
+
+会自动收钓鱼竿和自动按下快捷键喝药水
 
 <p align="center">
   <img src="TerrariaAutoFish/UI.png" width="600" alt="GitHub"/>
