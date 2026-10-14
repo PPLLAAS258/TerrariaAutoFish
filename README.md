@@ -8,7 +8,7 @@
 
 参考 `Izzy's Ultimate Fishing Toolkit` 的 `Izzy's Fishing Bot v2.00` GitHub项目的C#源码，按其工作原理使用`python`重写并汉化支持多语言。
 
-[原作者lzzy的GitHub项目地址](https://github.com/RussDev7/Izzy-s-Ultimate-Fishing-Toolkit`)
+[原作者lzzy的GitHub项目地址](https://github.com/RussDev7/Izzy-s-Ultimate-Fishing-Toolkit)
 
 程序界面支持12种语言
 
